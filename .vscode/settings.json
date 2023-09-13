@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "log.h": "c",
+        "stdio.h": "c",
+        "getopt.h": "c"
+    }
+}
