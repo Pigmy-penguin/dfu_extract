@@ -2,6 +2,9 @@
 #define DFU_H
 #include <stdint.h>
 
+#define DFU_SIGNATURE "DFU"
+#define DFU_SIGNATURE_LENGTH 3
+
 typedef struct {
     char szSignature[5];    // Five-byte coded field
     uint8_t bVersion;       // One-byte coded field

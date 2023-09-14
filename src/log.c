@@ -10,7 +10,7 @@ void logMessage(const char* color, const char* format, ...) {
     timeinfo = localtime(&rawtime);
     
     // Print the timestamp and color
-    printf("[%02d:%02d:%02d] %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, color);
+    printf("%s[%02d:%02d:%02d]%s %s", ANSI_COLOR_GREEN, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, ANSI_COLOR_RESET, color);
 
     // Use variadic arguments to handle formatted message
     va_list args;

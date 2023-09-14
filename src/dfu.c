@@ -20,7 +20,7 @@ const char* formatBytes(long long bytes) {
     return formatted;
 }
 
-char *string_repeat( int n, const char * s ) {
+char *string_repeat(int n, const char * s) {
   size_t slen = strlen(s);
   char * dest = malloc(n*slen+1);
 
@@ -32,9 +32,60 @@ char *string_repeat( int n, const char * s ) {
   return dest;
 }
 
+static int keepGoing() {
+loop:
+    printf("Do you want to extract the images ? [yes/no] \033[1;33m> \033[0m");
+    char input[10];
+    while(1) {
+        if (fgets(input, sizeof(input), stdin) != NULL) {
+            input[strcspn(input, "\n")] = '\0'; // Remove newline character
+
+            // Convert input to lowercase for case-insensitive comparison
+            for (int i = 0; input[i]; i++) {
+                input[i] = tolower(input[i]);
+            }
+            if (strcmp(input, "y") == 0 || strcmp(input, "yes") == 0) {
+                return 1;
+            } else if (strcmp(input, "n") == 0 || strcmp(input, "no") == 0) {
+                return 0;
+            } else {
+                goto loop;
+            }
+        } else {
+            logMessage(ANSI_COLOR_RED, "Error reading input.\n");
+            return -1;
+        }
+    }
+}
+
+int findDFUSuffix(FILE *file, DFUSuffix *suffix) {
+    size_t suffixSize = sizeof(DFUSuffix);
+
+    fseek(file, 0, SEEK_END); // seek to end of file
+    size_t fsize = ftell(file); // get current file pointer
+    fseek(file, 0, SEEK_SET);
+
+    char *buffer = malloc(fsize);
+    if (buffer != NULL && fread(buffer, 1, fsize, file) == fsize) {
+        const char *end = buffer + fsize - 2;
+        const char *p = buffer;
+        while (p < end) {
+            if (p[0] == 'U' && p[1] == 'F' && p[2] == 'D') {
+                memcpy(suffix, p-sizeof(uint64_t), sizeof(DFUSuffix));
+                free(buffer);
+                return 0;
+            }
+        p++;
+        }
+    }
+
+    free(buffer);
+    return -1;
+}
+
 // Function to extract DFU data
 int extractDFU(const char* inputFile, const char* outputFile) {
-    logMessage(ANSI_COLOR_GREEN, "Extracting DFU data...");
+    logMessage(ANSI_COLOR_RESET, "Extracting DFU data...");
 
     // Open input file
     FILE* inFile = fopen(inputFile, "rb");
@@ -62,14 +113,29 @@ int extractDFU(const char* inputFile, const char* outputFile) {
         return 1;
     }
 
-    logMessage(ANSI_COLOR_GREEN, "DFU format revision: %d", prefix.bVersion);
+    logMessage(ANSI_COLOR_RESET, "DFU format revision: %d", prefix.bVersion);
     if (prefix.bVersion != 1) {
         logMessage(ANSI_COLOR_RED, "Unknown DFU format revision");
         return 1;
     }
     
-    logMessage(ANSI_COLOR_GREEN, "File size: %s", formatBytes(prefix.DFUImageSize));
-    logMessage(ANSI_COLOR_GREEN, "Images: %d", prefix.bTargets);
+    logMessage(ANSI_COLOR_RESET, "File size: %s", formatBytes(prefix.DFUImageSize));
+    DFUSuffix *suffix = malloc(sizeof(DFUSuffix));
+    if (suffix != NULL && findDFUSuffix(inFile, suffix) == 0) {
+        // Successfully found and read the DFUSuffix structure
+        if ((((uint16_t)suffix->bcdDFUHi << 8) | suffix->bcdDFULo) != 0x011A) {
+            logMessage(ANSI_COLOR_RED, "Unknown DFU version");
+            return -1;
+        }
+        logMessage(ANSI_COLOR_RESET, "Product ID: %d", ((uint16_t)suffix->idProductHi << 8) | suffix->idProductLo);
+        logMessage(ANSI_COLOR_RESET, "Vendor ID: %d", ((uint16_t)suffix->idVendorHi << 8) | suffix->idVendorLo);
+    } else {
+        logMessage(ANSI_COLOR_RED, "Unable to find suffix. Invalid file");
+        return -1;
+    }
+
+    logMessage(ANSI_COLOR_RESET, "%d images were found", prefix.bTargets);
+    puts("----------------------------------------");
     for (int i = 0; i != prefix.bTargets; i++) {
         size_t dfuOffset = sizeof(DFUPrefix);
         size_t targetSize = sizeof(TargetPrefix);
@@ -86,37 +152,50 @@ int extractDFU(const char* inputFile, const char* outputFile) {
             logMessage(ANSI_COLOR_RED, "Wrong target signature");
             return 1;
         }
-        
-        char buffer[300];
-        snprintf(buffer, sizeof(buffer), "║ -- Image %d : %s", i, target.szTargetName);
-        size_t l0 = strlen(buffer);
-        logMessage(ANSI_COLOR_GREEN, "╔═%s%s", string_repeat(l0, "═"), "╗");
         if (target.bTargetNamed == 1) {
-            logMessage(ANSI_COLOR_GREEN, "║ -- Image %d : %s", i, target.szTargetName, string_repeat((l0+4, " "), "║"));
+            logMessage(ANSI_COLOR_RESET, "Image %d : %s", i, target.szTargetName);
         }
         else {
-            logMessage(ANSI_COLOR_GREEN, "║ -- Image %d", i);
+            logMessage(ANSI_COLOR_RESET, "Image %d", i);
         }
 
-        snprintf(buffer, sizeof(buffer), "║ -- Size %s", formatBytes(target.dwTargetSize/10));
-        size_t l1 = strlen(buffer);
-        snprintf(buffer, sizeof(buffer), "║ -- Elements %d", target.dwNbElements);
-        size_t l2 = strlen(buffer);
+        logMessage(ANSI_COLOR_RESET, "Size %s", formatBytes(target.dwTargetSize/10));
+        logMessage(ANSI_COLOR_RESET, "%d elements", target.dwNbElements);
 
-        logMessage(ANSI_COLOR_GREEN, "║ -- Size %s%s%s", formatBytes(target.dwTargetSize/10), string_repeat((l0+4)-l1, " "), "║");
-        logMessage(ANSI_COLOR_GREEN, "║ -- Elements %d", target.dwNbElements);
+        fseek(inFile, dfuOffset+targetSize, SEEK_SET);
 
-
-        for (int j = 0; j != target.dwNbElements; j++) {
+        for (int j = 0; j != target.dwNbElements+1; j++) {
+            printf("Pos1: %d\n", ftell(inFile));
             ImageElement element;
-            if (fseek(inFile, dfuOffset+targetSize, SEEK_SET) == -1 ||
-            fread(&element, 1, sizeof(ImageElement), inFile) != sizeof(ImageElement)) {
+
+            if (fread(&element, 1, sizeof(ImageElement), inFile) != sizeof(ImageElement)) {
                 logMessage(ANSI_COLOR_RED, "Error reading file");
                 close(inFile);
                 return 1;
-        }
+            }
+            printf("Pos2: %d\n", ftell(inFile));
+            logMessage(ANSI_COLOR_RESET, "--------------------");
+            logMessage(ANSI_COLOR_RESET, "║ Element %d", j+1);
+            logMessage(ANSI_COLOR_RESET, "║ Adress: 0x%08X", element.dwElementAddress);
+            logMessage(ANSI_COLOR_RESET, "║ Size: %s", formatBytes(element.dwElementSize));
+
+            char filename[255];
+            snprintf(filename, sizeof(filename), "element-%d", j);
+            FILE *binary = fopen(filename, "wb");
+            fwrite((&(element.dwElementAddress))+sizeof(ImageElement), element.dwElementSize, 1, binary);
+            fseek(inFile, ftell(inFile)+element.dwElementSize, SEEK_SET);
+            printf("Pos3: %d\n", ftell(inFile));
         }
 
+    }
+    puts("----------------------------------------\n");
+
+    if(keepGoing() == 1) {
+        putchar('\n');
+        logMessage(ANSI_COLOR_RESET, "Extracting images");
+    }
+    else {
+        return 0;
     }
 
     // Open output file
@@ -138,7 +217,6 @@ int extractDFU(const char* inputFile, const char* outputFile) {
         logMessage(ANSI_COLOR_RED, "Error closing output file");
         return 1;
     }
-
-    logMessage(ANSI_COLOR_GREEN, "DFU extraction complete.");
+    logMessage(ANSI_COLOR_RESET, "DFU extraction complete.");
     return 0;
 }
